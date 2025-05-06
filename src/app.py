@@ -10,6 +10,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 import os
 from pathlib import Path
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from pydantic import BaseModel
+from typing import Dict
+from fastapi import Depends
 
 app = FastAPI(title="Mergington High School API",
               description="API for viewing and signing up for extracurricular activities")
@@ -76,6 +80,58 @@ activities = {
         "participants": ["charlotte@mergington.edu", "henry@mergington.edu"]
     }
 }
+
+# OAuth2 setup
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token")
+
+# In-memory user database
+users_db = {
+    "admin@mergington.edu": {
+        "password": "admin123",
+        "role": "admin"
+    },
+    "teacher@mergington.edu": {
+        "password": "teacher123",
+        "role": "teacher"
+    },
+    "student@mergington.edu": {
+        "password": "student123",
+        "role": "student"
+    }
+}
+
+class User(BaseModel):
+    username: str
+    role: str
+
+def authenticate_user(username: str, password: str):
+    user = users_db.get(username)
+    if user and user["password"] == password:
+        return User(username=username, role=user["role"])
+    return None
+
+@app.post("/token")
+def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    user = authenticate_user(form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid credentials")
+    return {"access_token": user.username, "token_type": "bearer"}
+
+def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
+    user = users_db.get(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return User(username=token, role=user["role"])
+
+@app.get("/users/me")
+def read_users_me(current_user: User = Depends(get_current_user)):
+    return current_user
+
+@app.get("/admin")
+def admin_dashboard(current_user: User = Depends(get_current_user)):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return {"message": "Welcome to the admin dashboard!"}
 
 
 @app.get("/")
