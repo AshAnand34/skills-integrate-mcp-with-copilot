@@ -14,6 +14,8 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from typing import Dict
 from fastapi import Depends
+from datetime import datetime, timedelta
+import jwt
 
 app = FastAPI(title="Mergington High School API",
               description="API for viewing and signing up for extracurricular activities")
@@ -110,18 +112,40 @@ def authenticate_user(username: str, password: str):
         return User(username=username, role=user["role"])
     return None
 
+# Secret key for JWT
+SECRET_KEY = "your_secret_key"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+def create_access_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.now(datetime.timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
 @app.post("/token")
 def login(form_data: OAuth2PasswordRequestForm = Depends()):
     user = authenticate_user(form_data.username, form_data.password)
     if not user:
         raise HTTPException(status_code=400, detail="Invalid credentials")
-    return {"access_token": user.username, "token_type": "bearer"}
+    access_token = create_access_token(data={"sub": user.username})
+    return {"access_token": access_token, "token_type": "bearer"}
 
 def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
-    user = users_db.get(token)
-    if not user:
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if not username:
+            raise HTTPException(status_code=401, detail="Invalid token: missing subject")
+        user = users_db.get(username)
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid token: user not found")
+        return User(username=username, role=user["role"])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token has expired")
+    except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
-    return User(username=token, role=user["role"])
 
 @app.get("/users/me")
 def read_users_me(current_user: User = Depends(get_current_user)):
